@@ -7,6 +7,8 @@
 # Your platform. See PLATS for possible values.
 PLAT= none
 
+include $(DEVKITPRO)/libnx/switch_rules
+
 CC= gcc
 CFLAGS= -O2 -Wall $(MYCFLAGS)
 AR= ar rcu
