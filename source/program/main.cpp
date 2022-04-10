@@ -2,6 +2,8 @@
 #include <nn.hpp>
 #include <cstring>
 #include "cJSON.h"
+#include "remote_api.hpp"
+#include "lua-5.1.5/src/lua.hpp"
 
 typedef struct
 {
@@ -116,6 +118,72 @@ MAKE_HOOK_T(Result, romMounted, (char const *path, void *romCache, unsigned long
     return res;
 );
 
+void multiworld_schedule_update(lua_State* L) {
+    lua_getglobal(L, "Game");
+    lua_getfield(L, -1, "AddGUISF");
+
+    lua_pushinteger(L, 0);
+    lua_pushstring(L, "RemoteLua.Update");
+    lua_pushstring(L, "");
+
+    lua_call(L, 3, 0);
+    lua_pop(L, 1);
+}
+
+int multiworld_init(lua_State* L) {
+    RemoteApi::Init();
+    multiworld_schedule_update(L);
+    return 0;
+}
+
+int multiworld_update(lua_State* L) {
+    RemoteApi::ProcessCommand([=](std::array<char, 4096>& buffer, size_t bufferLength) {
+        size_t response = 0;
+
+        int loadResult = luaL_loadbuffer(L, buffer.data(), bufferLength, "remote lua");
+
+        if (loadResult == 0) {
+            int pcallResult = lua_pcall(L, 0, 1, 0);
+
+            size_t resultSize;
+            const char* luaResult = lua_tolstring(L, 1, &resultSize);
+            
+            if (pcallResult == 0) {
+                // success! top string is the entire result
+                memcpy(buffer.data(), luaResult, std::min(4096UL, resultSize));
+                response = resultSize;
+            } else {
+                // error happened
+                response = snprintf(buffer.data(), 4096, "{\"error\": \"%s\"}", luaResult);
+            }
+        } else {
+            response = snprintf(buffer.data(), 4096, "{\"error\": \"error parsing buffer: %d\"}", loadResult);
+        }
+        return response;
+    });
+
+    // Register calling update again
+    multiworld_schedule_update(L);
+    return 0;
+}
+
+static const luaL_Reg multiworld_lib[] = {
+  {"Init", multiworld_init},
+  {"Update", multiworld_update},
+  {NULL, NULL}
+};
+
+/* Hook asdf */
+MAKE_HOOK_T(void, luaRegisterGlobals, (lua_State* L),
+    impl(L);
+
+    lua_pushcfunction(L, luaopen_debug);
+    lua_pushstring(L, "debug");
+    lua_call(L, 1, 0);
+
+    luaL_register(L, "RemoteLua", multiworld_lib);
+);
+
 extern "C" void exl_main(void* x0, void* x1)
 {
     /* Setup hooking enviroment. */
@@ -125,6 +193,7 @@ extern "C" void exl_main(void* x0, void* x1)
     /* Hook functions we care about */
     INJECT_HOOK_T(0x16624, forceRomfs);
     INJECT_HOOK_T(nn::fs::MountRom, romMounted);
+    INJECT_HOOK_T(0x106ce90, luaRegisterGlobals);
 
     /* Get the address of dread's crc64 function */
     crc64 = (u64 (*)(char const *, u64))exl::hook::GetTargetOffset(0x1570);

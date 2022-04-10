@@ -14,5 +14,5 @@
 
 namespace exl::setting {
     /* How large the fake .bss heap will be. */
-    constexpr size_t HeapSize = 0xB0000;
+    constexpr size_t HeapSize = 0x200000;
 }
