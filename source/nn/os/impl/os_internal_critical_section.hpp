@@ -56,7 +56,6 @@ namespace nn::os::detail {
             }
     };
 
-    /* TODO: storage. */
-    using InternalCriticalSectionStorage = InternalCriticalSection;
+    using InternalCriticalSectionStorage = nn::util::TypedStorage<InternalCriticalSection>;
 
 }
