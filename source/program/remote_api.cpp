@@ -69,12 +69,16 @@ void SocketSpawn(void*) {
         u32 addrLen;
         s32 clientSocket = nn::socket::Accept(g_TcpSocket, &clientAddr, &addrLen);
 
-        ssize_t length = nn::socket::Recv(clientSocket, sharedBuffer.data(), sharedBuffer.size(), 0);
-        if (length > 0) {
-            bufferLength = length;
-            readyForGameThread.store(true);
-            commandParsedEvent.Wait();
-            nn::socket::Send(clientSocket, sharedBuffer.data(), bufferLength, 0);
+        while (true) {
+            ssize_t length = nn::socket::Recv(clientSocket, sharedBuffer.data(), sharedBuffer.size(), 0);
+            if (length > 0) {
+                bufferLength = length;
+                readyForGameThread.store(true);
+                commandParsedEvent.Wait();
+                nn::socket::Send(clientSocket, sharedBuffer.data(), bufferLength, 0);
+            } else {
+                break;
+            }
         }
         nn::socket::Close(clientSocket);
     }
