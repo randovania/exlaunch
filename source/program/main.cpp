@@ -137,8 +137,12 @@ int multiworld_init(lua_State* L) {
 }
 
 int multiworld_update(lua_State* L) {
-    RemoteApi::ProcessCommand([=](std::array<char, 4096>& buffer, size_t bufferLength) {
+    RemoteApi::ProcessCommand([=](RemoteApi::CommandBuffer& buffer, size_t bufferLength) {
         size_t response = 0;
+
+        bool output_success = false;
+        char* output_start = buffer.data() + 4;
+        size_t output_buffer_size = buffer.size() - 4;
 
         int loadResult = luaL_loadbuffer(L, buffer.data(), bufferLength, "remote lua");
 
@@ -150,16 +154,21 @@ int multiworld_update(lua_State* L) {
             
             if (pcallResult == 0) {
                 // success! top string is the entire result
-                memcpy(buffer.data(), luaResult, std::min(4096UL, resultSize));
+                output_success = true;
+                memcpy(output_start, luaResult, std::min(output_buffer_size, resultSize));
                 response = resultSize;
             } else {
                 // error happened
-                response = snprintf(buffer.data(), 4096, "{\"error\": \"%s\"}", luaResult);
+                response = snprintf(output_start, output_buffer_size, "%s", luaResult);
             }
         } else {
-            response = snprintf(buffer.data(), 4096, "{\"error\": \"error parsing buffer: %d\"}", loadResult);
+            response = snprintf(output_start, output_buffer_size, "error parsing buffer: %d", loadResult);
         }
-        return response;
+        buffer[0] = output_success;        
+        buffer[1] = response & 0xff;
+        buffer[2] = (response >> 8)  & 0xff;
+        buffer[3] = (response >> 16) & 0xff;
+        return response + 4;
     });
 
     // Register calling update again
@@ -170,7 +179,7 @@ int multiworld_update(lua_State* L) {
 static const luaL_Reg multiworld_lib[] = {
   {"Init", multiworld_init},
   {"Update", multiworld_update},
-  {NULL, NULL}
+  {NULL, NULL}  
 };
 
 /* Hook asdf */
@@ -182,6 +191,12 @@ MAKE_HOOK_T(void, luaRegisterGlobals, (lua_State* L),
     lua_call(L, 1, 0);
 
     luaL_register(L, "RemoteLua", multiworld_lib);
+
+    lua_pushinteger(L, RemoteApi::VERSION);
+    lua_setfield(L, -2, "Version");
+
+    lua_pushinteger(L, RemoteApi::BufferSize);
+    lua_setfield(L, -2, "BufferSize");
 );
 
 extern "C" void exl_main(void* x0, void* x1)

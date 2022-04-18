@@ -27,7 +27,7 @@ namespace {
     constexpr inline auto SocketPort = 6969;
 
     static shimmer::util::StaticThread<0x4000> SocketSpawnThread;
-    static std::array<char, 4096> sharedBuffer;
+    static RemoteApi::CommandBuffer sharedBuffer;
     static size_t bufferLength = 0;
 };
 
@@ -89,7 +89,7 @@ void RemoteApi::Init() {
     // /* Inject hook. */
 }
 
-void RemoteApi::ProcessCommand(const std::function<size_t (std::array<char, 4096>& buffer, size_t bufferLength)>& processor) {
+void RemoteApi::ProcessCommand(const std::function<size_t (CommandBuffer& buffer, size_t bufferLength)>& processor) {
     if (readyForGameThread.load()) {
         bufferLength = processor(sharedBuffer, bufferLength);
         readyForGameThread.store(false);
