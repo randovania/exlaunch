@@ -17,6 +17,9 @@ size_t g_stringListSize = 0;
 /* Function ptr to dread's crc function. */
 u64 (*crc64)(char const *str, u64 size) = NULL;
 
+/* The main executable's pcall, so we get proper error handling. */
+int (*exefs_lua_pcall) (lua_State *L, int nargs, int nresults, int errfunc) = NULL;
+
 /* Takes in a pointer to string and if found in the list, is replaced with the desired string. */
 void replaceString(const char **str)
 {
@@ -144,10 +147,17 @@ int multiworld_update(lua_State* L) {
         char* output_start = buffer.data() + 4;
         size_t output_buffer_size = buffer.size() - 4;
 
+        // +1; use lua's tostring so we properly convert all types
+        lua_getglobal(L, "tostring");
+
+        // +1
         int loadResult = luaL_loadbuffer(L, buffer.data(), bufferLength, "remote lua");
 
         if (loadResult == 0) {
-            int pcallResult = lua_pcall(L, 0, 1, 0);
+            // -1, +1
+            int pcallResult = exefs_lua_pcall(L, 0, 1, 0);
+            // -2, +1
+            lua_call(L, 1, 1);
 
             size_t resultSize;
             const char* luaResult = lua_tolstring(L, 1, &resultSize);
@@ -212,6 +222,7 @@ extern "C" void exl_main(void* x0, void* x1)
 
     /* Get the address of dread's crc64 function */
     crc64 = (u64 (*)(char const *, u64))exl::hook::GetTargetOffset(0x1570);
+    exefs_lua_pcall = (int (*) (lua_State *L, int nargs, int nresults, int errfunc)) exl::hook::GetTargetOffset(0x1061bc0);
 }
 
 extern "C" NORETURN void exl_exception_entry()
