@@ -1,4 +1,5 @@
 #include "lib.hpp"
+#include "lib/util/modules.hpp"
 #include <nn.hpp>
 #include <cstring>
 #include "cJSON.h"
@@ -153,8 +154,15 @@ extern "C" void exl_main(void* x0, void* x1)
     INJECT_HOOK_T(offsets.CFilePathStrIdCtor, forceRomfs);
     INJECT_HOOK_T(nn::fs::MountRom, romMounted);
 
+    /* Install the hook at the provided function pointer. Function type is checked against the callback function. */
+    // StubCopyright::InstallAtFuncPtr(nn::oe::SetCopyrightVisibility);
+
+    /* Alternative install funcs: */
+    /* InstallAtPtr takes an absolute address as a uintptr_t. */
+    /* InstallAtOffset takes an offset into the main module. */
+
     /* Get the address of dread's crc64 function */
-    crc64 = (u64 (*)(char const *, u64))exl::hook::GetTargetOffset(offsets.crc64);
+    crc64 = (u64 (*)(char const *, u64))exl::util::modules::GetTargetOffset(offsets.crc64);
 }
 
 extern "C" NORETURN void exl_exception_entry()
