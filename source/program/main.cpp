@@ -209,19 +209,46 @@ MAKE_HOOK_T(void, luaRegisterGlobals, (lua_State* L),
     lua_setfield(L, -2, "BufferSize");
 );
 
+typedef struct
+{
+    uintptr_t crc64;
+    uintptr_t CFilePathStrIdCtor;
+} functionOffsets;
+
+/* Handle version differences */
+void getVersionOffsets(functionOffsets *offsets)
+{
+    nn::oe::DisplayVersion dispVer;
+    nn::oe::GetDisplayVersion(&dispVer);
+
+    if(strcmp(dispVer.displayVersion, "2.1.0") == 0)
+    {
+        offsets->crc64 = 0x1570;
+        offsets->CFilePathStrIdCtor = 0x166C8;
+    } 
+    else /* 1.0.0 - 2.0.0 */
+    {
+        offsets->crc64 = 0x1570;
+        offsets->CFilePathStrIdCtor = 0x16624;
+    }
+}
+
 extern "C" void exl_main(void* x0, void* x1)
 {
+    functionOffsets offsets;
     /* Setup hooking enviroment. */
     envSetOwnProcessHandle(exl::util::proc_handle::Get());
     exl::hook::Initialize();
 
+    getVersionOffsets(&offsets);
+
     /* Hook functions we care about */
-    INJECT_HOOK_T(0x16624, forceRomfs);
+    INJECT_HOOK_T(offsets.CFilePathStrIdCtor, forceRomfs);
     INJECT_HOOK_T(nn::fs::MountRom, romMounted);
     INJECT_HOOK_T(0x106ce90, luaRegisterGlobals);
 
     /* Get the address of dread's crc64 function */
-    crc64 = (u64 (*)(char const *, u64))exl::hook::GetTargetOffset(0x1570);
+    crc64 = (u64 (*)(char const *, u64))exl::hook::GetTargetOffset(offsets.crc64);
     exefs_lua_pcall = (int (*) (lua_State *L, int nargs, int nresults, int errfunc)) exl::hook::GetTargetOffset(0x1061bc0);
 }
 
