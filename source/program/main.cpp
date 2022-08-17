@@ -154,9 +154,9 @@ int multiworld_update(lua_State* L) {
         int loadResult = luaL_loadbuffer(L, buffer.data(), bufferLength, "remote lua");
 
         if (loadResult == 0) {
-            // -1, +1
+            // -1, +1 - call the code we just loaded
             int pcallResult = exefs_lua_pcall(L, 0, 1, 0);
-            // -2, +1
+            // -2, +1 - call tostring with the result of that
             lua_call(L, 1, 1);
 
             size_t resultSize;
@@ -213,6 +213,9 @@ typedef struct
 {
     uintptr_t crc64;
     uintptr_t CFilePathStrIdCtor;
+    uintptr_t luaRegisterGlobals;
+    uintptr_t lua_pcall;
+
 } functionOffsets;
 
 /* Handle version differences */
@@ -230,6 +233,8 @@ void getVersionOffsets(functionOffsets *offsets)
     {
         offsets->crc64 = 0x1570;
         offsets->CFilePathStrIdCtor = 0x16624;
+        offsets->luaRegisterGlobals = 0x106ce90;
+        offsets->lua_pcall = 0x1061bc0;
     }
 }
 
@@ -245,11 +250,11 @@ extern "C" void exl_main(void* x0, void* x1)
     /* Hook functions we care about */
     INJECT_HOOK_T(offsets.CFilePathStrIdCtor, forceRomfs);
     INJECT_HOOK_T(nn::fs::MountRom, romMounted);
-    INJECT_HOOK_T(0x106ce90, luaRegisterGlobals);
+    INJECT_HOOK_T(offsets.luaRegisterGlobals, luaRegisterGlobals);
 
     /* Get the address of dread's crc64 function */
     crc64 = (u64 (*)(char const *, u64))exl::hook::GetTargetOffset(offsets.crc64);
-    exefs_lua_pcall = (int (*) (lua_State *L, int nargs, int nresults, int errfunc)) exl::hook::GetTargetOffset(0x1061bc0);
+    exefs_lua_pcall = (int (*) (lua_State *L, int nargs, int nresults, int errfunc)) exl::hook::GetTargetOffset(offsets.lua_pcall);
 }
 
 extern "C" NORETURN void exl_exception_entry()
