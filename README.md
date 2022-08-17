@@ -1,3 +1,7 @@
+# Dread Remote Lua
+A further modification of Dread depackager, that makes the game listen to a socket, running any lua code sent to it.
+
+# Original readme 
 # dread depackager
 A modification for Metroid: Dread allowing redirection of files from within pkg files to loose files in RomFS.
 
