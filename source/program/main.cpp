@@ -228,6 +228,8 @@ void getVersionOffsets(functionOffsets *offsets)
     {
         offsets->crc64 = 0x1570;
         offsets->CFilePathStrIdCtor = 0x166C8;
+        offsets->luaRegisterGlobals = 0x010aed50;
+        offsets->lua_pcall = 0x010a3a80;
     } 
     else /* 1.0.0 - 2.0.0 */
     {
