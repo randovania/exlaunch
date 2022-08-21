@@ -68,6 +68,7 @@ void SocketSpawn(void*) {
         struct sockaddr clientAddr;
         u32 addrLen;
         s32 clientSocket = nn::socket::Accept(g_TcpSocket, &clientAddr, &addrLen);
+        u8 requestNumber = 0;
 
         while (true) {
             ssize_t length = nn::socket::Recv(clientSocket, sharedBuffer.data(), sharedBuffer.size(), 0);
@@ -75,7 +76,9 @@ void SocketSpawn(void*) {
                 bufferLength = length;
                 readyForGameThread.store(true);
                 commandParsedEvent.Wait();
+                nn::socket::Send(clientSocket, &requestNumber, sizeof(u8), 0);
                 nn::socket::Send(clientSocket, sharedBuffer.data(), bufferLength, 0);
+                ++requestNumber;
             } else {
                 break;
             }
