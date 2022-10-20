@@ -124,8 +124,8 @@ HOOK_DEFINE_TRAMPOLINE(RomMounted) {
 
 typedef struct
 {
-    uintptr_t crc64;
-    uintptr_t CFilePathStrIdCtor;
+    ptrdiff_t crc64;
+    ptrdiff_t CFilePathStrIdCtor;
 } functionOffsets;
 
 /* Handle version differences */
@@ -157,7 +157,7 @@ extern "C" void exl_main(void* x0, void* x1)
 
     /* Install the hook at the provided function pointer. Function type is checked against the callback function. */
     /* Hook functions we care about */
-    ForceRomfs::InstallAtPtr(offsets.CFilePathStrIdCtor);
+    ForceRomfs::InstallAtOffset(offsets.CFilePathStrIdCtor);
     RomMounted::InstallAtFuncPtr(nn::fs::MountRom);
 
     /* Alternative install funcs: */
