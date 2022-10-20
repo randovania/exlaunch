@@ -42,8 +42,8 @@ namespace nn::os {
         u32 broadcast_counter_low;
         u32 broadcast_counter_high;
 
-        detail::InternalCriticalSectionStorage* cs_event;
-        detail::InternalConditionVariableStorage* cv_signaled;
+        detail::InternalCriticalSectionStorage cs_event;
+        detail::InternalConditionVariableStorage cv_signaled;
     };
     static_assert(std::is_trivial<EventType>::value);
 

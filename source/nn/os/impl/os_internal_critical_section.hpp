@@ -56,6 +56,6 @@ namespace nn::os::detail {
             }
     };
 
-    using InternalCriticalSectionStorage = nn::util::TypedStorage<InternalCriticalSection>;
+    using InternalCriticalSectionStorage = util::TypedStorage<InternalCriticalSection>;
 
 }
