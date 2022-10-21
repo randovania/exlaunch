@@ -34,6 +34,6 @@ namespace nn::os {
         s32 lock_level;
         s32 nest_count;
         ThreadType *owner_thread;
-        detail::InternalCriticalSection critical_section;
+        detail::InternalCriticalSectionStorage critical_section;
     };
 }

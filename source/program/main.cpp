@@ -1,4 +1,5 @@
 #include "lib.hpp"
+#include "lib/util/modules.hpp"
 #include <nn.hpp>
 #include <cstring>
 #include "cJSON.h"
@@ -30,21 +31,23 @@ void replaceString(const char **str)
     }
 }
 
-/* Hook the function that handles conversion of a raw path to a CFilePathStrId, allowing the paths to be redirected. */
-MAKE_HOOK_T(void, forceRomfs, (void *CFilePathStrIdOut, const char *path, u8 flags),
+HOOK_DEFINE_TRAMPOLINE(ForceRomfs) {
+    /* Define the callback for when the function is called. Don't forget to make it static and name it Callback. */
+    static void Callback(void *CFilePathStrIdOut, const char *path, u8 flags) {
 
-    /* Just in case the path is NULL, pass it down to the real implementation, since we don't support replacing NULL paths anyway. */
-    if(path == NULL)
-    {
-        impl(CFilePathStrIdOut, path, flags);
-        return;
+        /* Just in case the path is NULL, pass it down to the real implementation, since we don't support replacing NULL paths anyway. */
+        if(path == NULL)
+        {
+            Orig(CFilePathStrIdOut, path, flags);
+            return;
+        }
+
+        /* Replace string if we have it in our list before passing to the real implementation. */
+        replaceString(&path);
+        Orig(CFilePathStrIdOut, path, flags);
     }
+};
 
-    /* Replace string if we have it in our list before passing to the real implementation. */
-    replaceString(&path);
-    impl(CFilePathStrIdOut, path, flags);
-    return;
-);
 
 /* Allocates a buffer and reads from the specified file. */
 void *openAndReadFile(const char *path)
@@ -110,16 +113,19 @@ void populateStringReplacementList()
 
 /* Hook romfs mounting. Pass the arguments down to the real implementation so romfs is mounted as normal. */
 /* Once romfs is mounted, we can read files from it in order to populate our string replacement list. */
-MAKE_HOOK_T(Result, romMounted, (char const *path, void *romCache, unsigned long cacheSize),
-    Result res = impl(path, romCache, cacheSize);
-    populateStringReplacementList();
-    return res;
-);
+HOOK_DEFINE_TRAMPOLINE(RomMounted) {
+    static Result Callback(char const *path, void *romCache, unsigned long cacheSize) {
+        Result res = Orig(path, romCache, cacheSize);
+        populateStringReplacementList();
+        return res;
+    }
+};
+
 
 typedef struct
 {
-    uintptr_t crc64;
-    uintptr_t CFilePathStrIdCtor;
+    ptrdiff_t crc64;
+    ptrdiff_t CFilePathStrIdCtor;
 } functionOffsets;
 
 /* Handle version differences */
@@ -149,12 +155,17 @@ extern "C" void exl_main(void* x0, void* x1)
 
     getVersionOffsets(&offsets);
 
+    /* Install the hook at the provided function pointer. Function type is checked against the callback function. */
     /* Hook functions we care about */
-    INJECT_HOOK_T(offsets.CFilePathStrIdCtor, forceRomfs);
-    INJECT_HOOK_T(nn::fs::MountRom, romMounted);
+    ForceRomfs::InstallAtOffset(offsets.CFilePathStrIdCtor);
+    RomMounted::InstallAtFuncPtr(nn::fs::MountRom);
+
+    /* Alternative install funcs: */
+    /* InstallAtPtr takes an absolute address as a uintptr_t. */
+    /* InstallAtOffset takes an offset into the main module. */
 
     /* Get the address of dread's crc64 function */
-    crc64 = (u64 (*)(char const *, u64))exl::hook::GetTargetOffset(offsets.crc64);
+    crc64 = (u64 (*)(char const *, u64))exl::util::modules::GetTargetOffset(offsets.crc64);
 }
 
 extern "C" NORETURN void exl_exception_entry()
