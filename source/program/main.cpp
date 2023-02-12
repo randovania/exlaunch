@@ -126,7 +126,6 @@ HOOK_DEFINE_TRAMPOLINE(RomMounted) {
     }
 };
 
-
 void multiworld_schedule_update(lua_State* L) {
     lua_getglobal(L, "Game");
     lua_getfield(L, -1, "AddGUISF");
@@ -137,6 +136,10 @@ void multiworld_schedule_update(lua_State* L) {
 
     lua_call(L, 3, 0);
     lua_pop(L, 1);
+
+    // set the RemoteLogHook variable in lua according to the client. logs are only sent over tcp socket iff true
+    lua_pushboolean(L, RemoteApi::clientSubs.logging);
+    lua_setglobal(L, "RemoteLogHook");
 }
 
 int multiworld_init(lua_State* L) {
@@ -146,18 +149,19 @@ int multiworld_init(lua_State* L) {
 }
 
 int multiworld_update(lua_State* L) {
-    RemoteApi::ProcessCommand([=](RemoteApi::CommandBuffer& buffer, size_t bufferLength) {
-        size_t response = 0;
-
-        bool output_success = false;
-        char* output_start = buffer.data() + 4;
-        size_t output_buffer_size = buffer.size() - 4;
+    RemoteApi::ProcessCommand([=](RemoteApi::CommandBuffer& RecvBuffer, size_t RecvBufferLength, size_t &size) -> char* {
+        size_t resultSize = 0;          // length of the lua string response (without \0)
+        size_t packetHeaderLength = 6;  // length of the packet header
+        bool outputSuccess = false;     // was the lua function call sucessfully
+        char* sendBuffer;               // sendBuffer to store the result. this pointer is returned 
+        size_t sendBufferSize;          // size of the dynamically allocated sendBuffer
+        char* outputStart;              // where the user data starts in the buffer
 
         // +1; use lua's tostring so we properly convert all types
         lua_getglobal(L, "tostring");
 
         // +1
-        int loadResult = luaL_loadbuffer(L, buffer.data(), bufferLength, "remote lua");
+        int loadResult = luaL_loadbuffer(L, RecvBuffer.data() + 1, RecvBufferLength - 1, "remote lua");
 
         if (loadResult == 0) {
             // -1, +1 - call the code we just loaded
@@ -165,26 +169,47 @@ int multiworld_update(lua_State* L) {
             // -2, +1 - call tostring with the result of that
             lua_call(L, 1, 1);
 
-            size_t resultSize;
             const char* luaResult = lua_tolstring(L, 1, &resultSize);
             
             if (pcallResult == 0) {
                 // success! top string is the entire result
-                output_success = true;
-                memcpy(output_start, luaResult, std::min(output_buffer_size, resultSize));
-                response = resultSize;
+                sendBufferSize = resultSize + packetHeaderLength;
+                sendBuffer = (char*) calloc(sendBufferSize, sizeof(char));
+                if (sendBuffer == NULL) return NULL;
+                outputStart = sendBuffer + 6;
+                outputSuccess = true;
+                memcpy(outputStart, luaResult, resultSize);
             } else {
                 // error happened
-                response = snprintf(output_start, output_buffer_size, "%s", luaResult);
+                sendBufferSize = resultSize + packetHeaderLength;
+                sendBuffer = (char*) calloc(sendBufferSize, sizeof(char));
+                if (sendBuffer == NULL) return NULL;
+                outputStart = sendBuffer + 6;
+                // use +1 for the size because snprintf uses "n-1" bytes to keep space for \0 but we don't care about that in our send buffer
+                int printSize = snprintf(outputStart, resultSize + 1, "%s", luaResult);
+                // modify sendBufferSize to final amount which is used (don't care about the few extra bytes allocated, they will be freed eventually after send)
+                sendBufferSize = sendBufferSize - resultSize + printSize;
             }
         } else {
-            response = snprintf(output_start, output_buffer_size, "error parsing buffer: %d", loadResult);
+            const char* errorString = "error parsing buffer: %d";
+            // calculation is: len of errorString minus 2 for "%d" plus 11 for the maximum bytes an integer can take
+            size_t maxStringLength = strlen(errorString) - 2 + 11;
+            sendBufferSize = maxStringLength + packetHeaderLength;
+            sendBuffer = (char*) calloc(sendBufferSize, sizeof(char));
+            if (sendBuffer == NULL) return NULL;
+            outputStart = sendBuffer + 6;
+            // use +1 for the size because snprintf uses "n-1" bytes to keep space for \0 but we don't care about that in our send buffer
+            int printSize = snprintf(outputStart, maxStringLength + 1, "error parsing buffer: %d", loadResult);
+            // modify sendBufferSize to final amount which is used (don't care about the few extra bytes allocated, they will be freed eventually after send)
+            sendBufferSize = sendBufferSize - resultSize + printSize;
         }
-        buffer[0] = output_success;        
-        buffer[1] = response & 0xff;
-        buffer[2] = (response >> 8)  & 0xff;
-        buffer[3] = (response >> 16) & 0xff;
-        return response + 4;
+        sendBuffer[0] = PACKET_REMOTE_LUA_EXEC;
+        sendBuffer[2] = outputSuccess;        
+        sendBuffer[3] = resultSize & 0xff;
+        sendBuffer[4] = (resultSize >> 8)  & 0xff;
+        sendBuffer[5] = (resultSize >> 16) & 0xff;
+        size = sendBufferSize;
+        return sendBuffer;
     });
 
     // Register calling update again
@@ -192,9 +217,37 @@ int multiworld_update(lua_State* L) {
     return 0;
 }
 
+/* This function gets called by the lua to sent message to the client iff RemoteLogHook is true */
+int gamelog_send(lua_State* L) {
+    RemoteApi::SendLog([=](size_t &size) -> char* {
+        size_t resultSize = 0;          // length of the lua string response (without \0)
+        char* sendBuffer;               // sendBuffer to store the result. this pointer is returned 
+        size_t sendBufferSize;          // size of the dynamically allocated sendBuffer
+        char* outputStart;              // where the user data starts in the buffer // = sendBuffer + 6;
+        size_t packetHeaderLength = 5;  // length of the packet header
+       
+        const char* luaResult = lua_tolstring(L, 1, &resultSize);
+
+        sendBufferSize = resultSize + packetHeaderLength;
+        sendBuffer = (char*) calloc(sendBufferSize, sizeof(char));
+        if (sendBuffer == NULL) return NULL;
+        outputStart = sendBuffer + packetHeaderLength;
+
+        sendBuffer[0] = PACKET_LOG_MESSAGE;
+        memcpy(&sendBuffer[1], &resultSize, sizeof(size_t));
+        memcpy(outputStart, luaResult, resultSize);
+
+        size = sendBufferSize;
+        return sendBuffer;
+    });
+    return 1;
+}
+
+
 static const luaL_Reg multiworld_lib[] = {
   {"Init", multiworld_init},
   {"Update", multiworld_update},
+  {"SendLog", gamelog_send},
   {NULL, NULL}  
 };
 

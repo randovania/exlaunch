@@ -7,18 +7,49 @@
 
 #include <nn.hpp>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <arpa/inet.h>
 #include <cstring>
 #include <atomic>
+#include <mutex>
+#include <malloc.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <vector>
+#include <errno.h>
+
+/**
+ * Ryujinx networking is sadly very limited.
+ * 1. Any blocking operation on any socket blocks all other operations on any socket. e.g. you can not recv on one thread and send on another.
+ *      It doesn't matter if you use different operations like recv/send/accept and even not if you try to use it on different sockets.
+ *      => only one blocking call
+ * 2. errno does not work correctly. It does not return EWOULDBLOCK or EAGAIN.
+ *      It returns length = -1 on recv for a connected socket and 0 for a non connected but only if gracefully shutdown
+ *      otherwise we stuck forever and can not reconnect.
+ *      That's why a manual keep-alive is implemented
+ * 3. Setting the socket to non-blocking doesn't work (at least not via fcntl)
+ *      Non-blocking works for recv as flag!
+ * 4. sighandler gets called if termination is requested (SIGTERM). Still can't get ryujinx to abort the "nn::socket::accept" => ryujinx crashes when stopping emulation / close ryujinx
+        It will not crash if a client is connected but a restart of the game crashes because of a thread can not be created!?!?
+*/
+
+
+
+struct ClientSubscriptions RemoteApi::clientSubs;
+typedef struct _PacketBuffer {
+    int size;     // size of the packet
+    char *buffer; // pointer to the buffer of length "size"
+} PacketBuffer;
 
 namespace {
     static s32 g_TcpSocket = -1;
+    static s32 clientSocket = -1;
     static std::atomic<bool> readyForGameThread = false;
-    static shimmer::util::Event commandParsedEvent;
+    u8 requestNumber = 0;
 
-    constexpr inline auto DefaultTcpAutoBufferSizeMax      = 192 * 1024; /* 192kb */
-    constexpr inline auto MinTransferMemorySize            = (2 * DefaultTcpAutoBufferSizeMax + (128 * 1024));
-    constexpr inline auto MinSocketAllocatorSize           = 128 * 1024;
+    constexpr inline auto DefaultTcpAutoBufferSizeMax = 192 * 1024; /* 192kb */
+    constexpr inline auto MinTransferMemorySize = (2 * DefaultTcpAutoBufferSizeMax + (128 * 1024));
+    constexpr inline auto MinSocketAllocatorSize = 128 * 1024;
 
     constexpr inline auto SocketAllocatorSize = MinSocketAllocatorSize * 1;
     constexpr inline auto TransferMemorySize = MinTransferMemorySize * 1;
@@ -26,21 +57,35 @@ namespace {
     constexpr inline auto SocketPoolSize = SocketAllocatorSize + TransferMemorySize;
     constexpr inline auto SocketPort = 6969;
 
+    constexpr inline auto ResetValueAliveTimer = 5000; // client should send alive packet every 2 seconds. loops all 2 ms to decrease. invalidate afte 10 s => 10 000 ms / 2 ms = 5000 cycles
+
     static shimmer::util::StaticThread<0x4000> SocketSpawnThread;
-    static RemoteApi::CommandBuffer sharedBuffer;
-    static size_t bufferLength = 0;
-};
+    static RemoteApi::CommandBuffer RecvBuffer;
+    static size_t RecvBufferLength = 0;
+    std::vector<PacketBuffer> sendBufferVector;
+    std::mutex sendBufferMutex;
+    static bool stopped = true;
+    static void *pool;
+    static int keepAlive;
+}; // namespace
+
+
+static void sig_handler(int _) {
+    if (clientSocket != -1) nn::socket::Close(clientSocket);
+    if (g_TcpSocket != -1) nn::socket::Close(g_TcpSocket);
+    nn::socket::Finalize();
+    free(pool);
+    stopped = false;
+}
 
 void PrepareThread() {
 
-    void* pool = aligned_alloc(0x4000, SocketPoolSize);
+    pool = aligned_alloc(0x4000, SocketPoolSize);
     R_ABORT_UNLESS(nn::socket::Initialize(pool, SocketPoolSize, SocketAllocatorSize, 14));
 
-    commandParsedEvent.Initialize(false, nn::os::EventClearMode::EventClearMode_AutoClear);
-
     /* Open socket. */
-    g_TcpSocket = nn::socket::Socket(AF_INET, SOCK_STREAM, 0);
-    if(g_TcpSocket < 0) EXL_ABORT(69);
+    g_TcpSocket = nn::socket::Socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (g_TcpSocket < 0) EXL_ABORT(69);
 
     /* Set socket to keep-alive. */
     // int flags = true;
@@ -52,38 +97,86 @@ void PrepareThread() {
     serverAddr.sin_addr.s_addr = INADDR_ANY;
     serverAddr.sin_port = nn::socket::InetHtons(SocketPort);
 
-    int rval = nn::socket::Bind(g_TcpSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr));
+    int rval = nn::socket::Bind(g_TcpSocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
     if (rval < 0) EXL_ABORT(69);
-    
-    rval = nn::socket::Listen(g_TcpSocket, 1);
+
+    rval = nn::socket::Listen(g_TcpSocket, 8);
     if (rval < 0) EXL_ABORT(69);
 }
 
-void SocketSpawn(void*) {
+void AddPacketToSendBuffer(char *buffer, int packetLength) {
+    std::unique_lock sendBufferLock{sendBufferMutex, std::defer_lock};
+    // TODO: This is potentially a bad idea because things called from game loop like "SendLog" would block the game until the lock is available?!?!
+    while (!sendBufferLock.try_lock())
+        svcSleepThread(100);
+    PacketBuffer nextPacket;
+    nextPacket.size = packetLength;
+    nextPacket.buffer = buffer;
+    sendBufferVector.push_back(nextPacket);
+    sendBufferLock.unlock();
+}
+
+void ReceiveLogic() {
+    // don't recv new packets while we waiting for game loop otherwise we need to make a copy of our receive buffer
+    if (readyForGameThread.load()) return;
+
+    ssize_t length = nn::socket::Recv(clientSocket, RecvBuffer.data(), RecvBuffer.size(), MSG_DONTWAIT);
+    RecvBufferLength = length;
+    if (length > 0) {
+        // data received
+        RemoteApi::ParseClientPacket();
+    }
+}
+
+void SendLogic() {
+    std::unique_lock sendBufferLock{sendBufferMutex, std::defer_lock};
+    if (sendBufferLock.try_lock()) {
+        for (PacketBuffer pb : sendBufferVector) {
+            ssize_t ret = nn::socket::Send(clientSocket, pb.buffer, pb.size, 0);
+            // mark them for removal
+            if (ret > 0) {
+                free(pb.buffer);
+                pb.buffer = NULL;
+            }
+        }
+        // erase everything with NULL pointer, other stays in the queue for a retry
+        sendBufferVector.erase(std::remove_if(sendBufferVector.begin(), sendBufferVector.end(), [](PacketBuffer pb) { return pb.buffer != NULL; }),
+                               sendBufferVector.end());
+        sendBufferLock.unlock();
+    }
+}
+
+void SocketSpawn(void *) {
     SocketSpawnThread.SetName("SocketSpawnThread");
     PrepareThread();
-
-    bool looping = true;
-    while (looping) {
+    while (stopped) {
         struct sockaddr clientAddr;
         u32 addrLen;
-        s32 clientSocket = nn::socket::Accept(g_TcpSocket, &clientAddr, &addrLen);
-        u8 requestNumber = 0;
+        requestNumber = 0;
+        memset(&RemoteApi::clientSubs, 0, sizeof(struct ClientSubscriptions));
+        clientSocket = nn::socket::Accept(g_TcpSocket, &clientAddr, &addrLen);
+        keepAlive = ResetValueAliveTimer;
+        while (stopped) {
+            // poll every 2 ms = 2000000 ns
+            svcSleepThread(2000000);
+            keepAlive--;
+            ReceiveLogic();
+            SendLogic();
 
-        while (true) {
-            ssize_t length = nn::socket::Recv(clientSocket, sharedBuffer.data(), sharedBuffer.size(), 0);
-            if (length > 0) {
-                bufferLength = length;
-                readyForGameThread.store(true);
-                commandParsedEvent.Wait();
-                nn::socket::Send(clientSocket, &requestNumber, sizeof(u8), 0);
-                nn::socket::Send(clientSocket, sharedBuffer.data(), bufferLength, 0);
-                ++requestNumber;
-            } else {
+            if (keepAlive == 0) {
+                // clean packet because there is no connection anymore
+                std::unique_lock sendBufferLock{sendBufferMutex, std::defer_lock};
+                while (!sendBufferLock.try_lock())
+                    svcSleepThread(100);
+                for (PacketBuffer pb : sendBufferVector)
+                    free(pb.buffer);
+                sendBufferVector.clear();
+                nn::socket::Close(clientSocket);
+                clientSocket = -1;
+                sendBufferLock.unlock();
                 break;
             }
         }
-        nn::socket::Close(clientSocket);
     }
 
     nn::socket::Close(g_TcpSocket);
@@ -91,15 +184,72 @@ void SocketSpawn(void*) {
 }
 
 void RemoteApi::Init() {
+    signal(SIGTERM, sig_handler);
     R_ABORT_UNLESS(SocketSpawnThread.Create(SocketSpawn));
     SocketSpawnThread.Start();
     // /* Inject hook. */
 }
 
-void RemoteApi::ProcessCommand(const std::function<size_t (CommandBuffer& buffer, size_t bufferLength)>& processor) {
+void RemoteApi::ProcessCommand(const std::function<char *(CommandBuffer &RecvBuffer, size_t RecvBufferLength, size_t &size)> &processor) {
     if (readyForGameThread.load()) {
-        bufferLength = processor(sharedBuffer, bufferLength);
+        size_t packetLength;
+        char *buffer = processor(RecvBuffer, RecvBufferLength, packetLength);
+        // processor wasn't able to allocate space. pretty bad because we can not send a reply
+        if (buffer == NULL) {
+            readyForGameThread.store(false);
+            return;
+        }
+        buffer[0] = PACKET_REMOTE_LUA_EXEC;
+        buffer[1] = requestNumber++;
+
+        AddPacketToSendBuffer(buffer, packetLength);
         readyForGameThread.store(false);
-        commandParsedEvent.Signal();
+    }
+}
+
+void RemoteApi::SendLog(const std::function<char *(size_t &size)> &processor) {
+    if (clientSocket > 0) {
+        size_t packetLength;
+        char *buffer = processor(packetLength);
+        // processor wasn't able to allocate space. pretty bad because we can not send the log
+        if (buffer == NULL) return;
+        buffer[0] = PACKET_LOG_MESSAGE;
+
+        AddPacketToSendBuffer(buffer, packetLength);
+    }
+}
+
+void RemoteApi::ParseHandshake() {
+    const char interestByte = RecvBuffer.data()[1];
+    RemoteApi::clientSubs.logging = interestByte & 0x1;
+    RemoteApi::clientSubs.multiworldUpdates = (interestByte & 0x2) >> 1;
+    RemoteApi::clientSubs.remoteLuaExecution = (interestByte & 0x4) >> 2;
+
+    char *buffer = (char *)calloc(2, sizeof(char));
+    // if we can't allocate 2 bytes, we are out of memory
+    if (buffer == NULL) return;
+
+    buffer[0] = PACKET_HANDSHAKE;
+    buffer[1] = requestNumber++;
+
+    AddPacketToSendBuffer(buffer, 2);
+}
+
+void RemoteApi::ParseRemoteLuaExec() {
+    // will be parsed in the next cycle by the game loop
+    readyForGameThread.store(true);
+}
+
+void RemoteApi::ParseClientPacket() {
+    switch (RecvBuffer.data()[0]) {
+    case PACKET_HANDSHAKE:
+        RemoteApi::ParseHandshake();
+        break;
+    case PACKET_REMOTE_LUA_EXEC:
+        RemoteApi::ParseRemoteLuaExec();
+        break;
+    case PACKET_KEEP_ALIVE:
+        keepAlive = ResetValueAliveTimer;
+        break;
     }
 }
