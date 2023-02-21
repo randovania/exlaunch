@@ -29,8 +29,6 @@
  *      That's why a manual keep-alive is implemented
  * 3. Setting the socket to non-blocking doesn't work (at least not via fcntl)
  *      Non-blocking works for recv as flag!
- * 4. sighandler gets called if termination is requested (SIGTERM). Still can't get ryujinx to abort the "nn::socket::accept" => ryujinx crashes when stopping
- emulation / close ryujinx It will not crash if a client is connected but a restart of the game crashes because of a thread can not be created!?!?
 */
 
 struct ClientSubscriptions RemoteApi::clientSubs;
@@ -67,13 +65,6 @@ namespace {
 }; // namespace
 static nn::os::MutexType sendBufferLock;
 
-static void sig_handler(int _) {
-    if (clientSocket != -1) nn::socket::Close(clientSocket);
-    if (g_TcpSocket != -1) nn::socket::Close(g_TcpSocket);
-    nn::socket::Finalize();
-    free(pool);
-    stopped = false;
-}
 
 void PrepareThread() {
     nn::os::InitializeMutex(&sendBufferLock, false, 0);
@@ -115,8 +106,9 @@ void AddPacketToSendBuffer(char *buffer, int packetLength) {
 void ReceiveLogic() {
     // don't recv new packets while we waiting for game loop otherwise we need to make a copy of our receive buffer
     if (readyForGameThread.load()) return;
+    memset(RecvBuffer.data(), 0, 4096);
 
-    ssize_t length = nn::socket::Recv(clientSocket, RecvBuffer.data(), RecvBuffer.size(), MSG_DONTWAIT);
+    ssize_t length = nn::socket::Recv(clientSocket, RecvBuffer.data(), 1, MSG_DONTWAIT);
     RecvBufferLength = length;
     if (length > 0) {
         // data received
@@ -177,7 +169,6 @@ void SocketSpawn(void *) {
 }
 
 void RemoteApi::Init() {
-    signal(SIGTERM, sig_handler);
     R_ABORT_UNLESS(SocketSpawnThread.Create(SocketSpawn));
     SocketSpawnThread.Start();
     // /* Inject hook. */
@@ -216,7 +207,6 @@ void RemoteApi::ParseHandshake() {
     const char interestByte = RecvBuffer.data()[1];
     RemoteApi::clientSubs.logging = interestByte & 0x1;
     RemoteApi::clientSubs.multiworldUpdates = (interestByte & 0x2) >> 1;
-    RemoteApi::clientSubs.remoteLuaExecution = (interestByte & 0x4) >> 2;
 
     char *buffer = (char *)calloc(2, sizeof(char));
     // if we can't allocate 2 bytes, we are out of memory
@@ -234,11 +224,18 @@ void RemoteApi::ParseRemoteLuaExec() {
 }
 
 void RemoteApi::ParseClientPacket() {
+    int remainingBytes = 0;
     switch (RecvBuffer.data()[0]) {
     case PACKET_HANDSHAKE:
+        RecvBufferLength += 1;
+        nn::socket::Recv(clientSocket, RecvBuffer.data() + 1, 1, MSG_DONTWAIT);
         RemoteApi::ParseHandshake();
         break;
     case PACKET_REMOTE_LUA_EXEC:
+        nn::socket::Recv(clientSocket, RecvBuffer.data() + 1, 4, MSG_DONTWAIT);
+        memcpy(&remainingBytes, RecvBuffer.data() + 1, 4);
+        nn::socket::Recv(clientSocket, RecvBuffer.data() + 5, remainingBytes, MSG_DONTWAIT);
+        RecvBufferLength += 4 + remainingBytes;
         RemoteApi::ParseRemoteLuaExec();
         break;
     case PACKET_KEEP_ALIVE:

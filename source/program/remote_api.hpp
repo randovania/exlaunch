@@ -7,7 +7,6 @@
 struct ClientSubscriptions {
     bool logging;
     bool multiworldUpdates;
-    bool remoteLuaExecution;  // TODO: remove that
 };
 
 enum PacketType {

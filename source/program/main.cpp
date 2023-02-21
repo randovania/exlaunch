@@ -161,7 +161,7 @@ int multiworld_update(lua_State* L) {
         lua_getglobal(L, "tostring");
 
         // +1
-        int loadResult = luaL_loadbuffer(L, RecvBuffer.data() + 1, RecvBufferLength - 1, "remote lua");
+        int loadResult = luaL_loadbuffer(L, RecvBuffer.data() + 5, RecvBufferLength - 5, "remote lua");
 
         if (loadResult == 0) {
             // -1, +1 - call the code we just loaded
