@@ -29,11 +29,9 @@
  *      That's why a manual keep-alive is implemented
  * 3. Setting the socket to non-blocking doesn't work (at least not via fcntl)
  *      Non-blocking works for recv as flag!
- * 4. sighandler gets called if termination is requested (SIGTERM). Still can't get ryujinx to abort the "nn::socket::accept" => ryujinx crashes when stopping emulation / close ryujinx
-        It will not crash if a client is connected but a restart of the game crashes because of a thread can not be created!?!?
+ * 4. sighandler gets called if termination is requested (SIGTERM). Still can't get ryujinx to abort the "nn::socket::accept" => ryujinx crashes when stopping
+ emulation / close ryujinx It will not crash if a client is connected but a restart of the game crashes because of a thread can not be created!?!?
 */
-
-
 
 struct ClientSubscriptions RemoteApi::clientSubs;
 typedef struct _PacketBuffer {
@@ -63,12 +61,11 @@ namespace {
     static RemoteApi::CommandBuffer RecvBuffer;
     static size_t RecvBufferLength = 0;
     std::vector<PacketBuffer> sendBufferVector;
-    std::mutex sendBufferMutex;
     static bool stopped = true;
     static void *pool;
     static int keepAlive;
 }; // namespace
-
+static nn::os::MutexType sendBufferLock;
 
 static void sig_handler(int _) {
     if (clientSocket != -1) nn::socket::Close(clientSocket);
@@ -79,6 +76,7 @@ static void sig_handler(int _) {
 }
 
 void PrepareThread() {
+    nn::os::InitializeMutex(&sendBufferLock, false, 0);
 
     pool = aligned_alloc(0x4000, SocketPoolSize);
     R_ABORT_UNLESS(nn::socket::Initialize(pool, SocketPoolSize, SocketAllocatorSize, 14));
@@ -105,15 +103,13 @@ void PrepareThread() {
 }
 
 void AddPacketToSendBuffer(char *buffer, int packetLength) {
-    std::unique_lock sendBufferLock{sendBufferMutex, std::defer_lock};
     // TODO: This is potentially a bad idea because things called from game loop like "SendLog" would block the game until the lock is available?!?!
-    while (!sendBufferLock.try_lock())
-        svcSleepThread(100);
+    nn::os::LockMutex(&sendBufferLock);
     PacketBuffer nextPacket;
     nextPacket.size = packetLength;
     nextPacket.buffer = buffer;
     sendBufferVector.push_back(nextPacket);
-    sendBufferLock.unlock();
+    nn::os::UnlockMutex(&sendBufferLock);
 }
 
 void ReceiveLogic() {
@@ -129,21 +125,19 @@ void ReceiveLogic() {
 }
 
 void SendLogic() {
-    std::unique_lock sendBufferLock{sendBufferMutex, std::defer_lock};
-    if (sendBufferLock.try_lock()) {
-        for (PacketBuffer pb : sendBufferVector) {
-            ssize_t ret = nn::socket::Send(clientSocket, pb.buffer, pb.size, 0);
-            // mark them for removal
-            if (ret > 0) {
-                free(pb.buffer);
-                pb.buffer = NULL;
-            }
+    nn::os::LockMutex(&sendBufferLock);
+    for (PacketBuffer pb : sendBufferVector) {
+        ssize_t ret = nn::socket::Send(clientSocket, pb.buffer, pb.size, 0);
+        // mark them for removal
+        if (ret > 0) {
+            free(pb.buffer);
+            pb.buffer = NULL;
         }
-        // erase everything with NULL pointer, other stays in the queue for a retry
-        sendBufferVector.erase(std::remove_if(sendBufferVector.begin(), sendBufferVector.end(), [](PacketBuffer pb) { return pb.buffer != NULL; }),
-                               sendBufferVector.end());
-        sendBufferLock.unlock();
     }
+    // erase everything with NULL pointer, other stays in the queue for a retry
+    sendBufferVector.erase(std::remove_if(sendBufferVector.begin(), sendBufferVector.end(), [](PacketBuffer pb) { return pb.buffer != NULL; }),
+                           sendBufferVector.end());
+    nn::os::UnlockMutex(&sendBufferLock);
 }
 
 void SocketSpawn(void *) {
@@ -165,15 +159,14 @@ void SocketSpawn(void *) {
 
             if (keepAlive == 0) {
                 // clean packet because there is no connection anymore
-                std::unique_lock sendBufferLock{sendBufferMutex, std::defer_lock};
-                while (!sendBufferLock.try_lock())
-                    svcSleepThread(100);
+                nn::os::LockMutex(&sendBufferLock);
+                svcSleepThread(100);
                 for (PacketBuffer pb : sendBufferVector)
                     free(pb.buffer);
                 sendBufferVector.clear();
                 nn::socket::Close(clientSocket);
                 clientSocket = -1;
-                sendBufferLock.unlock();
+                nn::os::UnlockMutex(&sendBufferLock);
                 break;
             }
         }
