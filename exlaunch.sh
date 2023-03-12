@@ -36,7 +36,7 @@ export FTP_USERNAME="anonymous"
 export FTP_PASSWORD=""
 
 # Settings for deploying to Ryu. Used by the deploy-ryu.sh script.
-export RYU_PATH="/mnt/c/Users/shado/AppData/Roaming/Ryujinx/"
+export RYU_PATH="/mnt/c/Users/shado/AppData/Roaming/Ryujinx"
 
 #-------------------------- End of user configuration --------------------------
 

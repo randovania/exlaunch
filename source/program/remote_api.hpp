@@ -6,20 +6,20 @@
 // Client's interest. e.g. logging is only forwarded to client if it was set in handshake
 struct ClientSubscriptions {
     bool logging;
-    bool multiworldUpdates;
+    bool locationCollected;
 };
 
 enum PacketType {
     PACKET_HANDSHAKE = 1,
     PACKET_LOG_MESSAGE,
     PACKET_REMOTE_LUA_EXEC,
-    PACKET_KEEP_ALIVE
+    PACKET_KEEP_ALIVE,
+    PACKET_LOCATION_COLLECTED,
 };
 
 enum ClientInterests {
     LOGGING = 1,
-    MULTIWORLD_UPDATE = 2,
-    REMOTE_LUA_EXEC = 4
+    LOCATION_COLLECTED = 2
 };
 
 class RemoteApi {
@@ -31,7 +31,7 @@ class RemoteApi {
 
     static void Init();
     static void ProcessCommand(const std::function<char*(CommandBuffer &RecvBuffer, size_t RecvBufferLength, size_t &size)> &processor);
-    static void SendLog(const std::function<char*(size_t &size)> &processor);
+    static void SendMessage(const std::function<char*(size_t &size)> &processor);
     static void ParseClientPacket();
     static void ParseHandshake();
     static void ParseRemoteLuaExec();

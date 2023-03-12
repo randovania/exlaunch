@@ -191,13 +191,12 @@ void RemoteApi::ProcessCommand(const std::function<char *(CommandBuffer &RecvBuf
     }
 }
 
-void RemoteApi::SendLog(const std::function<char *(size_t &size)> &processor) {
+void RemoteApi::SendMessage(const std::function<char *(size_t &size)> &processor) {
     if (clientSocket > 0) {
         size_t packetLength;
         char *buffer = processor(packetLength);
         // processor wasn't able to allocate space. pretty bad because we can not send the log
         if (buffer == NULL) return;
-        buffer[0] = PACKET_LOG_MESSAGE;
 
         AddPacketToSendBuffer(buffer, packetLength);
     }
@@ -206,7 +205,7 @@ void RemoteApi::SendLog(const std::function<char *(size_t &size)> &processor) {
 void RemoteApi::ParseHandshake() {
     const char interestByte = RecvBuffer.data()[1];
     RemoteApi::clientSubs.logging = interestByte & 0x1;
-    RemoteApi::clientSubs.multiworldUpdates = (interestByte & 0x2) >> 1;
+    RemoteApi::clientSubs.locationCollected = (interestByte & 0x2) >> 1;
 
     char *buffer = (char *)calloc(2, sizeof(char));
     // if we can't allocate 2 bytes, we are out of memory

@@ -126,6 +126,7 @@ HOOK_DEFINE_TRAMPOLINE(RomMounted) {
     }
 };
 
+
 void multiworld_schedule_update(lua_State* L) {
     lua_getglobal(L, "Game");
     lua_getfield(L, -1, "AddGUISF");
@@ -136,10 +137,6 @@ void multiworld_schedule_update(lua_State* L) {
 
     lua_call(L, 3, 0);
     lua_pop(L, 1);
-
-    // set the RemoteLogHook variable in lua according to the client. logs are only sent over tcp socket iff true
-    lua_pushboolean(L, RemoteApi::clientSubs.logging);
-    lua_setglobal(L, "RemoteLogHook");
 }
 
 int multiworld_init(lua_State* L) {
@@ -217,35 +214,58 @@ int multiworld_update(lua_State* L) {
     return 0;
 }
 
-/* This function gets called by the lua to sent message to the client iff RemoteLogHook is true */
+char* create_packet_from_lua_string(size_t &size, lua_State* L) {
+    size_t resultSize = 0;          // length of the lua string response (without \0)
+    char* sendBuffer;               // sendBuffer to store the result. this pointer is returned 
+    size_t sendBufferSize;          // size of the dynamically allocated sendBuffer
+    char* outputStart;              // where the user data starts in the buffer // = sendBuffer + 6;
+    size_t packetHeaderLength = 5;  // length of the packet header
+    
+    const char* luaResult = lua_tolstring(L, 1, &resultSize);
+
+    sendBufferSize = resultSize + packetHeaderLength;
+    sendBuffer = (char*) calloc(sendBufferSize, sizeof(char));
+    if (sendBuffer == NULL) return NULL;
+    outputStart = sendBuffer + packetHeaderLength;
+
+    memcpy(&sendBuffer[1], &resultSize, sizeof(size_t));
+    memcpy(outputStart, luaResult, resultSize);
+
+    size = sendBufferSize;
+    return sendBuffer;
+}
+
+/* This function gets called by the lua to sent message to the client */
 int gamelog_send(lua_State* L) {
-    RemoteApi::SendLog([=](size_t &size) -> char* {
-        size_t resultSize = 0;          // length of the lua string response (without \0)
-        char* sendBuffer;               // sendBuffer to store the result. this pointer is returned 
-        size_t sendBufferSize;          // size of the dynamically allocated sendBuffer
-        char* outputStart;              // where the user data starts in the buffer // = sendBuffer + 6;
-        size_t packetHeaderLength = 5;  // length of the packet header
-       
-        const char* luaResult = lua_tolstring(L, 1, &resultSize);
+    if (RemoteApi::clientSubs.logging) {
+        RemoteApi::SendMessage([=](size_t &size) -> char* {
+            char* sendBuffer = create_packet_from_lua_string(size, L); 
+            if (sendBuffer == NULL) return NULL;
+            sendBuffer[0] = PACKET_LOG_MESSAGE;
+            return sendBuffer;
+        });
+    }
+    return 1;
+}
 
-        sendBufferSize = resultSize + packetHeaderLength;
-        sendBuffer = (char*) calloc(sendBufferSize, sizeof(char));
-        if (sendBuffer == NULL) return NULL;
-        outputStart = sendBuffer + packetHeaderLength;
 
-        sendBuffer[0] = PACKET_LOG_MESSAGE;
-        memcpy(&sendBuffer[1], &resultSize, sizeof(size_t));
-        memcpy(outputStart, luaResult, resultSize);
-
-        size = sendBufferSize;
-        return sendBuffer;
-    });
+/* This function gets called by the lua to sent a location collected message */
+int location_collectd(lua_State* L) {
+    if (RemoteApi::clientSubs.locationCollected) {
+        RemoteApi::SendMessage([=](size_t &size) -> char* {
+            char* sendBuffer = create_packet_from_lua_string(size, L); 
+            if (sendBuffer == NULL) return NULL;
+            sendBuffer[0] = PACKET_LOCATION_COLLECTED;
+            return sendBuffer;
+        });
+    }
     return 1;
 }
 
 
 static const luaL_Reg multiworld_lib[] = {
   {"Init", multiworld_init},
+  {"SendLocationCollected", location_collectd},
   {"Update", multiworld_update},
   {"SendLog", gamelog_send},
   {NULL, NULL}  
