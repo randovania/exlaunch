@@ -146,18 +146,16 @@ int multiworld_init(lua_State* L) {
 }
 
 int multiworld_update(lua_State* L) {
-    RemoteApi::ProcessCommand([=](RemoteApi::CommandBuffer& buffer, size_t bufferLength) {
-        size_t response = 0;
-
-        bool output_success = false;
-        char* output_start = buffer.data() + 4;
-        size_t output_buffer_size = buffer.size() - 4;
+    RemoteApi::ProcessCommand([=](RemoteApi::CommandBuffer& RecvBuffer, size_t RecvBufferLength) -> std::vector<u8>* {
+        size_t resultSize = 0;          // length of the lua string response (without \0)
+        bool outputSuccess = false;     // was the lua function call sucessfully
+        std::vector<u8>* sendBuffer = new std::vector<u8>();               // sendBuffer to store the result. this pointer is returned 
 
         // +1; use lua's tostring so we properly convert all types
         lua_getglobal(L, "tostring");
 
         // +1
-        int loadResult = luaL_loadbuffer(L, buffer.data(), bufferLength, "remote lua");
+        int loadResult = luaL_loadbuffer(L, RecvBuffer.data() + 5, RecvBufferLength - 5, "remote lua");
 
         if (loadResult == 0) {
             // -1, +1 - call the code we just loaded
@@ -165,26 +163,25 @@ int multiworld_update(lua_State* L) {
             // -2, +1 - call tostring with the result of that
             lua_call(L, 1, 1);
 
-            size_t resultSize;
             const char* luaResult = lua_tolstring(L, 1, &resultSize);
             
             if (pcallResult == 0) {
                 // success! top string is the entire result
-                output_success = true;
-                memcpy(output_start, luaResult, std::min(output_buffer_size, resultSize));
-                response = resultSize;
-            } else {
-                // error happened
-                response = snprintf(output_start, output_buffer_size, "%s", luaResult);
-            }
+                outputSuccess = true;
+            } 
+            sendBuffer->insert(sendBuffer->begin(), luaResult, luaResult + resultSize);
         } else {
-            response = snprintf(output_start, output_buffer_size, "error parsing buffer: %d", loadResult);
+            std::string errorMessage = "error parsing buffer: " + std::to_string(loadResult);
+            const char* errorAsCString = errorMessage.c_str();
+            resultSize = strlen(errorAsCString);
+            sendBuffer->insert(sendBuffer->begin(), errorAsCString, errorAsCString + resultSize);
         }
-        buffer[0] = output_success;        
-        buffer[1] = response & 0xff;
-        buffer[2] = (response >> 8)  & 0xff;
-        buffer[3] = (response >> 16) & 0xff;
-        return response + 4;
+        sendBuffer->insert(sendBuffer->begin(), PACKET_REMOTE_LUA_EXEC);
+        sendBuffer->insert(sendBuffer->begin() + 1, outputSuccess);
+        sendBuffer->insert(sendBuffer->begin() + 2, resultSize & 0xff);
+        sendBuffer->insert(sendBuffer->begin() + 3, (resultSize >> 8)  & 0xff);
+        sendBuffer->insert(sendBuffer->begin() + 4, (resultSize >> 16)  & 0xff);
+        return sendBuffer;
     });
 
     // Register calling update again
@@ -192,9 +189,98 @@ int multiworld_update(lua_State* L) {
     return 0;
 }
 
+std::vector<u8>* create_packet_from_lua_string(lua_State* L) {
+    size_t resultSize = 0;          // length of the lua string response (without \0)
+    std::vector<u8>* sendBuffer;  // sendBuffer to store the result. this pointer is returned 
+    
+    const char* luaResult = lua_tolstring(L, 1, &resultSize);
+
+    sendBuffer = new std::vector<u8>();
+    if (sendBuffer == NULL) return NULL;
+
+    uint32_t resultAs32Bit = resultSize;
+    u8* chars = reinterpret_cast<u8*>(&resultAs32Bit);
+    // If you move the following line by one line down the compiler throws a warning?!?
+    sendBuffer->insert(sendBuffer->begin(), luaResult, luaResult + resultAs32Bit);
+    sendBuffer->insert(sendBuffer->begin(), chars, chars + sizeof(uint32_t));
+
+    return sendBuffer;
+}
+
+/* This function gets called by the lua to sent message to the client */
+int gamelog_send(lua_State* L) {
+    if (RemoteApi::clientSubs.logging) {
+        RemoteApi::SendMessage([=]() -> std::vector<u8>* {
+            std::vector<u8>* sendBuffer = create_packet_from_lua_string(L); 
+            if (sendBuffer == NULL) return NULL;
+            sendBuffer->insert(sendBuffer->begin(), (u8)PACKET_LOG_MESSAGE);
+            return sendBuffer;
+        });
+    }
+    return 1;
+}
+
+/* This function gets called by the lua to sent message to the client */
+int inventory_send(lua_State* L) {
+    if (RemoteApi::clientSubs.multiWorld) {
+        RemoteApi::SendMessage([=]() -> std::vector<u8>* {
+            std::vector<u8>* sendBuffer = create_packet_from_lua_string(L); 
+            if (sendBuffer == NULL) return NULL;
+            sendBuffer->insert(sendBuffer->begin(), (u8)PACKET_NEW_INVENTORY);
+            return sendBuffer;
+        });
+    }
+    return 1;
+}
+
+/* This function gets called by the lua to sent message to the client */
+int indices_send(lua_State* L) {
+    if (RemoteApi::clientSubs.multiWorld) {
+        RemoteApi::SendMessage([=]() -> std::vector<u8>* {
+            std::vector<u8>* sendBuffer = create_packet_from_lua_string(L); 
+            if (sendBuffer == NULL) return NULL;
+            sendBuffer->insert(sendBuffer->begin(), (u8)PACKET_COLLECTED_INDICES);
+            return sendBuffer;
+        });
+    }
+    return 1;
+}
+
+/* This function gets called by the lua to sent message to the client */
+int recv_pickups_send(lua_State* L) {
+    if (RemoteApi::clientSubs.multiWorld) {
+        RemoteApi::SendMessage([=]() -> std::vector<u8>* {
+            std::vector<u8>* sendBuffer = create_packet_from_lua_string(L); 
+            if (sendBuffer == NULL) return NULL;
+            sendBuffer->insert(sendBuffer->begin(), (u8)PACKET_RECEIVED_PICKUPS);
+            return sendBuffer;
+        });
+    }
+    return 1;
+}
+
+/* This function gets called by the lua to sent message to the client */
+int new_game_state_send(lua_State* L) {
+    if (RemoteApi::clientSubs.multiWorld) {
+        RemoteApi::SendMessage([=]() -> std::vector<u8>* {
+            std::vector<u8>* sendBuffer = create_packet_from_lua_string(L); 
+            if (sendBuffer == NULL) return NULL;
+            sendBuffer->insert(sendBuffer->begin(), (u8)PACKET_GAME_STATE);
+            return sendBuffer;
+        });
+    }
+    return 1;
+}
+
+
 static const luaL_Reg multiworld_lib[] = {
   {"Init", multiworld_init},
   {"Update", multiworld_update},
+  {"SendLog", gamelog_send},
+  {"SendInventory", inventory_send},
+  {"SendIndices", indices_send},
+  {"SendReceivedPickups", recv_pickups_send},
+  {"SendNewGameState", new_game_state_send},
   {NULL, NULL}  
 };
 
