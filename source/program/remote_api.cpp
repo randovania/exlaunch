@@ -81,16 +81,16 @@ void PrepareThread() {
     if (rval < 0) EXL_ABORT(69);
 }
 
-void AddPacketToSendBuffer(PacketBuffer buffer) {
+void AddPacketToSendBuffer(PacketBuffer& buffer) {
     nn::os::LockMutex(&sendBufferLock);
-    sendBuffer.push_back(buffer);
+    sendBuffer.push_back(std::move(buffer));
     nn::os::UnlockMutex(&sendBufferLock);
 }
 
 void ReceiveLogic() {
     // don't recv new packets while we waiting for game loop otherwise we need to make a copy of our receive buffer
     if (readyForGameThread.load()) return;
-    memset(RecvBuffer.data(), 0, 4096);
+    memset(RecvBuffer.data(), 0, RecvBuffer.size());
 
     ssize_t length = nn::socket::Recv(clientSocket, RecvBuffer.data(), 1, MSG_DONTWAIT);
     RecvBufferLength = length;
@@ -102,20 +102,16 @@ void ReceiveLogic() {
 
 void SendLogic() {
     nn::os::LockMutex(&sendBufferLock);
-    for (PacketBuffer pb : sendBuffer) {
+    for (auto& pb : sendBuffer) {
         ssize_t ret = nn::socket::Send(clientSocket, pb->data(), pb->size(), 0);
         // mark them for removal
         if (ret > 0) {
             pb->clear();
         }
     }
-    // erase everything with NULL pointer, other stays in the queue for a retry
-    sendBuffer.erase(std::remove_if(sendBuffer.begin(), sendBuffer.end(), [](PacketBuffer pb) { 
-        if (pb->size() == 0) {
-            free(pb);
-            return 1;
-        }
-        return 0;
+    // erase everything with size of 0
+    sendBuffer.erase(std::remove_if(sendBuffer.begin(), sendBuffer.end(), [](auto& pb) { 
+        return pb->size() == 0;
     }),
                            sendBuffer.end());
     nn::os::UnlockMutex(&sendBufferLock);
@@ -144,8 +140,6 @@ void SocketSpawn(void *) {
                 // clean packet because there is no connection anymore
                 nn::os::LockMutex(&sendBufferLock);
                 svcSleepThread(100);
-                for (PacketBuffer pb : sendBuffer)
-                    free(pb);
                 sendBuffer.clear();
                 nn::socket::Close(clientSocket);
                 clientSocket = -1;
@@ -165,14 +159,10 @@ void RemoteApi::Init() {
     // /* Inject hook. */
 }
 
-void RemoteApi::ProcessCommand(const std::function<std::vector<u8> *(CommandBuffer &RecvBuffer, size_t RecvBufferLength)> &processor) {
+void RemoteApi::ProcessCommand(const std::function<PacketBuffer(CommandBuffer &RecvBuffer, size_t RecvBufferLength)> &processor) {
     if (readyForGameThread.load()) {
-        std::vector<u8> *buffer = processor(RecvBuffer, RecvBufferLength);
-        // processor wasn't able to allocate space. pretty bad because we can not send a reply
-        if (buffer == NULL) {
-            readyForGameThread.store(false);
-            return;
-        }
+        PacketBuffer buffer = processor(RecvBuffer, RecvBufferLength);
+        readyForGameThread.store(false);
         buffer->insert(buffer->begin() + 1, requestNumber++);
 
         AddPacketToSendBuffer(buffer);
@@ -180,12 +170,9 @@ void RemoteApi::ProcessCommand(const std::function<std::vector<u8> *(CommandBuff
     }
 }
 
-void RemoteApi::SendMessage(const std::function<std::vector<u8> *()> &processor) {
+void RemoteApi::SendMessage(lua_State* L, PacketType packetType, const std::function<PacketBuffer(lua_State* L, PacketType packetType)> &processor) {
     if (clientSocket > 0) {
-        std::vector<u8> *buffer = processor();
-        // processor wasn't able to allocate space. pretty bad because we can not send the log
-        if (buffer == NULL) return;
-
+        PacketBuffer buffer = processor(L, packetType);
         AddPacketToSendBuffer(buffer);
     }
 }
@@ -195,7 +182,7 @@ void RemoteApi::ParseHandshake() {
     RemoteApi::clientSubs.logging = interestByte & 0x1;
     RemoteApi::clientSubs.multiWorld = (interestByte & 0x2) >> 1;
 
-    std::vector<u8> *buffer = new std::vector<u8>();
+    PacketBuffer buffer(new std::vector<u8>());
     buffer->push_back(PACKET_HANDSHAKE);
     buffer->push_back(requestNumber++);
 

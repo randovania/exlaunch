@@ -2,9 +2,10 @@
 
 #include <functional>
 #include <array>
+#include "lua-5.1.5/src/lua.hpp"
 
-typedef std::vector<u8>* PacketBuffer;
-typedef std::vector<PacketBuffer> SendBuffer;
+typedef std::unique_ptr<std::vector<u8>> PacketBuffer;
+using SendBuffer = std::vector<PacketBuffer>;
 
 // Client's interest. e.g. logging is only forwarded to client if it was set in handshake
 struct ClientSubscriptions {
@@ -36,8 +37,8 @@ class RemoteApi {
     using CommandBuffer = std::array<char, BufferSize>;
 
     static void Init();
-    static void ProcessCommand(const std::function<std::vector<u8> *(CommandBuffer &RecvBuffer, size_t RecvBufferLength)> &processor);
-    static void SendMessage(const std::function<std::vector<u8> *()> &processor);
+    static void ProcessCommand(const std::function<PacketBuffer(CommandBuffer &RecvBuffer, size_t RecvBufferLength)> &processor);
+    static void SendMessage(lua_State* L, PacketType packetType, const std::function<PacketBuffer(lua_State* L, PacketType packetType)> &processor);
     static void ParseClientPacket();
     static void ParseHandshake();
     static void ParseRemoteLuaExec();
