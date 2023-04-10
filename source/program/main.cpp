@@ -145,7 +145,9 @@ int multiworld_init(lua_State* L) {
     return 0;
 }
 
+/* This functions is called perodically from the game and calls RemoteApi::ProcessCommand with a callback function */
 int multiworld_update(lua_State* L) {
+    /* Callback is executing the RecvBuffer as lua code */
     RemoteApi::ProcessCommand([=](RemoteApi::CommandBuffer& RecvBuffer, size_t RecvBufferLength) -> PacketBuffer {
         size_t resultSize = 0;          // length of the lua string response (without \0)
         bool outputSuccess = false;     // was the lua function call sucessfully
@@ -217,7 +219,7 @@ int gamelog_send(lua_State* L) {
     if (RemoteApi::clientSubs.logging) {
         build_and_send_message(L, PACKET_LOG_MESSAGE);
     }
-    return 1;
+    return 0;
 }
 
 /* Gets called by lua to send the inventory */
@@ -225,7 +227,7 @@ int inventory_send(lua_State* L) {
     if (RemoteApi::clientSubs.multiWorld) {
         build_and_send_message(L, PACKET_NEW_INVENTORY);
     }
-    return 1;
+    return 0;
 }
 
 /* Gets called by lua to send the indices of the already collected locations */
@@ -233,7 +235,7 @@ int indices_send(lua_State* L) {
     if (RemoteApi::clientSubs.multiWorld) {
         build_and_send_message(L, PACKET_COLLECTED_INDICES);
     }
-    return 1;
+    return 0;
 }
 
 /* Gets called by lua to send the received pickups from other players */
@@ -241,7 +243,7 @@ int recv_pickups_send(lua_State* L) {
     if (RemoteApi::clientSubs.multiWorld) {
         build_and_send_message(L, PACKET_RECEIVED_PICKUPS);
     }
-    return 1;
+    return 0;
 }
 
 /* Gets called by lua to send the current state (like ingame or main menu) */
@@ -249,7 +251,7 @@ int new_game_state_send(lua_State* L) {
     if (RemoteApi::clientSubs.multiWorld) {
         build_and_send_message(L, PACKET_GAME_STATE);
     }
-    return 1;
+    return 0;
 }
 
 

@@ -159,12 +159,12 @@ void RemoteApi::Init() {
     // /* Inject hook. */
 }
 
+/* Checks if readyForGameThread is true and executes the callback in that case */
+/* readyForGameThread is set to true if a packet with type PACKET_REMOTE_LUA_EXEC is received  */
 void RemoteApi::ProcessCommand(const std::function<PacketBuffer(CommandBuffer &RecvBuffer, size_t RecvBufferLength)> &processor) {
     if (readyForGameThread.load()) {
         PacketBuffer buffer = processor(RecvBuffer, RecvBufferLength);
-        readyForGameThread.store(false);
         buffer->insert(buffer->begin() + 1, requestNumber++);
-
         AddPacketToSendBuffer(buffer);
         readyForGameThread.store(false);
     }
