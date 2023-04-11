@@ -90,6 +90,7 @@ void AddPacketToSendBuffer(PacketBuffer& buffer) {
 void ReceiveLogic() {
     // don't recv new packets while we waiting for game loop otherwise we need to make a copy of our receive buffer
     if (readyForGameThread.load()) return;
+    keepAlive--;
     memset(RecvBuffer.data(), 0, RecvBuffer.size());
 
     ssize_t length = nn::socket::Recv(clientSocket, RecvBuffer.data(), 1, MSG_DONTWAIT);
@@ -132,7 +133,6 @@ void SocketSpawn(void *) {
         while (looping) {
             // poll every 2 ms = 2000000 ns
             svcSleepThread(2000000);
-            keepAlive--;
             ReceiveLogic();
             SendLogic();
 
@@ -161,9 +161,9 @@ void RemoteApi::Init() {
 
 /* Checks if readyForGameThread is true and executes the callback in that case */
 /* readyForGameThread is set to true if a packet with type PACKET_REMOTE_LUA_EXEC is received  */
-void RemoteApi::ProcessCommand(const std::function<PacketBuffer(CommandBuffer &RecvBuffer, size_t RecvBufferLength)> &processor) {
+void RemoteApi::ProcessCommand(lua_State* L, const std::function<PacketBuffer(lua_State* L, CommandBuffer &RecvBuffer, size_t RecvBufferLength)> &processor) {
     if (readyForGameThread.load()) {
-        PacketBuffer buffer = processor(RecvBuffer, RecvBufferLength);
+        PacketBuffer buffer = processor(L, RecvBuffer, RecvBufferLength);
         buffer->insert(buffer->begin() + 1, requestNumber++);
         AddPacketToSendBuffer(buffer);
         readyForGameThread.store(false);

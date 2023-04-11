@@ -37,7 +37,7 @@ class RemoteApi {
     using CommandBuffer = std::array<char, BufferSize>;
 
     static void Init();
-    static void ProcessCommand(const std::function<PacketBuffer(CommandBuffer &RecvBuffer, size_t RecvBufferLength)> &processor);
+    static void ProcessCommand(lua_State* L, const std::function<PacketBuffer(lua_State* L, CommandBuffer &RecvBuffer, size_t RecvBufferLength)> &processor);
     static void SendMessage(lua_State* L, PacketType packetType, const std::function<PacketBuffer(lua_State* L, PacketType packetType)> &processor);
     static void ParseClientPacket();
     static void ParseHandshake();
