@@ -59,10 +59,15 @@ void PrepareThread() {
 
     void* pool = aligned_alloc(0x4000, SocketPoolSize);
     R_ABORT_UNLESS(nn::socket::Initialize(pool, SocketPoolSize, SocketAllocatorSize, 14));
+}
 
+void CreateServerSocket() {
     /* Open socket. */
     g_TcpSocket = nn::socket::Socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (g_TcpSocket < 0) EXL_ABORT(69);
+    if (g_TcpSocket < 0) {
+        g_TcpSocket = -1;
+        return;
+    }
 
     /* Set socket to keep-alive. */
     // int flags = true;
@@ -75,10 +80,18 @@ void PrepareThread() {
     serverAddr.sin_port = nn::socket::InetHtons(SocketPort);
 
     int rval = nn::socket::Bind(g_TcpSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr));
-    if (rval < 0) EXL_ABORT(69);
+    if (rval < 0) {
+        nn::socket::Close(g_TcpSocket);
+        g_TcpSocket = -1;
+        return;
+    }
 
     rval = nn::socket::Listen(g_TcpSocket, 1);
-    if (rval < 0) EXL_ABORT(69);
+    if (rval < 0) {
+        nn::socket::Close(g_TcpSocket);
+        g_TcpSocket = -1;
+        return;
+    }
 }
 
 void AddPacketToSendBuffer(PacketBuffer& buffer) {
@@ -111,7 +124,7 @@ void SendLogic() {
         }
     }
     // erase everything with size of 0
-    sendBuffer.erase(std::remove_if(sendBuffer.begin(), sendBuffer.end(), [](auto& pb) { 
+    sendBuffer.erase(std::remove_if(sendBuffer.begin(), sendBuffer.end(), [](auto& pb) {
         return pb->size() == 0;
     }),
                            sendBuffer.end());
@@ -124,33 +137,44 @@ void SocketSpawn(void *) {
 
     bool looping = true;
     while (looping) {
-        struct sockaddr clientAddr;
-        u32 addrLen;
-        requestNumber = 0;
-        memset(&RemoteApi::clientSubs, 0, sizeof(struct ClientSubscriptions));
-        clientSocket = nn::socket::Accept(g_TcpSocket, &clientAddr, &addrLen);
-        keepAlive = ResetValueAliveTimer;
-        while (looping) {
-            // poll every 2 ms = 2000000 ns
+        CreateServerSocket();
+        if (g_TcpSocket == -1) {
             svcSleepThread(2000000);
-            ReceiveLogic();
-            SendLogic();
+            continue;
+        }
+        while (looping) {
+            struct sockaddr clientAddr;
+            u32 addrLen;
+            requestNumber = 0;
+            memset(&RemoteApi::clientSubs, 0, sizeof(struct ClientSubscriptions));
+            clientSocket = nn::socket::Accept(g_TcpSocket, &clientAddr, &addrLen);
+            if (clientSocket < 0) break;
+            keepAlive = ResetValueAliveTimer;
+            while (looping) {
+                // poll every 2 ms = 2000000 ns
+                svcSleepThread(2000000);
+                ReceiveLogic();
+                SendLogic();
 
-            if (keepAlive == 0) {
-                // clean packet because there is no connection anymore
-                nn::os::LockMutex(&sendBufferLock);
-                svcSleepThread(100);
-                sendBuffer.clear();
-                nn::socket::Close(clientSocket);
-                clientSocket = -1;
-                nn::os::UnlockMutex(&sendBufferLock);
-                break;
+                if (keepAlive == 0) {
+                    // clean packet because there is no connection anymore
+                    nn::os::LockMutex(&sendBufferLock);
+                    svcSleepThread(100);
+                    sendBuffer.clear();
+                    nn::socket::Close(clientSocket);
+                    clientSocket = -1;
+                    nn::os::UnlockMutex(&sendBufferLock);
+                    break;
+                }
             }
         }
-    }
 
-    nn::socket::Close(g_TcpSocket);
-    svcExitThread();
+        if (g_TcpSocket != -1) {
+            nn::socket::Shutdown(g_TcpSocket, SHUT_RDWR);
+            nn::socket::Close(g_TcpSocket);
+            g_TcpSocket = -1;
+        }
+    }
 }
 
 void RemoteApi::Init() {

@@ -272,6 +272,11 @@ HOOK_DEFINE_TRAMPOLINE(LuaRegisterGlobals) {
     static void Callback(lua_State* L) {
         Orig(L);
         
+        nn::oe::DisplayVersion dispVer;
+        nn::oe::GetDisplayVersion(&dispVer);
+        lua_pushstring(L, dispVer.displayVersion);
+        lua_setglobal(L, "GameVersion");
+
         lua_pushcfunction(L, luaopen_debug);
         lua_pushstring(L, "debug");
         lua_call(L, 1, 0);
