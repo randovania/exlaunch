@@ -69,9 +69,9 @@ void CreateServerSocket() {
         return;
     }
 
-    /* Set socket to keep-alive. */
-    // int flags = true;
-    // nn::socket::SetSockOpt(g_TcpSocket, SOL_SOCKET, SO_KEEPALIVE, &flags, sizeof(flags));
+    /* Set socket to reuse addr. On sleep mode, connection lost etc. this will make it reconnectable immediately. */
+    int flags = true;
+    nn::socket::SetSockOpt(g_TcpSocket, SOL_SOCKET, SO_REUSEADDR, &flags, sizeof(flags));
 
     /* Open and wait for connection. */
     struct sockaddr_in serverAddr;
