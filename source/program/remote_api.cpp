@@ -104,7 +104,7 @@ void ReceiveLogic() {
     // don't recv new packets while we waiting for game loop otherwise we need to make a copy of our receive buffer
     if (readyForGameThread.load()) return;
     keepAlive--;
-    memset(RecvBuffer.data(), 0, RecvBuffer.size());
+    std::fill(RecvBuffer.begin(), RecvBuffer.end(), 0);
 
     ssize_t length = nn::socket::Recv(clientSocket, RecvBuffer.data(), 1, MSG_DONTWAIT);
     RecvBufferLength = length;
@@ -218,18 +218,36 @@ void RemoteApi::ParseRemoteLuaExec() {
     readyForGameThread.store(true);
 }
 
+void RemoteApi::SendMalformedPacket() {
+    PacketBuffer buffer(new std::vector<u8>());
+    buffer->push_back(PACKET_MALFORMED);
+    AddPacketToSendBuffer(buffer);
+}
+
+bool RemoteApi::CheckReceivedBytes(ssize_t receivedBytes, int should) {
+    if (receivedBytes != should) {
+        RemoteApi::SendMalformedPacket();
+        return false;
+    }
+    return true;
+}
+
 void RemoteApi::ParseClientPacket() {
     int remainingBytes = 0;
+    ssize_t receivedBytes = -1;
     switch (RecvBuffer.data()[0]) {
     case PACKET_HANDSHAKE:
         RecvBufferLength += 1;
-        nn::socket::Recv(clientSocket, RecvBuffer.data() + 1, 1, MSG_DONTWAIT);
+        receivedBytes = nn::socket::Recv(clientSocket, RecvBuffer.data() + 1, 1, 0);
+        if (!RemoteApi::CheckReceivedBytes(receivedBytes, 1)) return;
         RemoteApi::ParseHandshake();
         break;
     case PACKET_REMOTE_LUA_EXEC:
-        nn::socket::Recv(clientSocket, RecvBuffer.data() + 1, 4, MSG_DONTWAIT);
+        receivedBytes = nn::socket::Recv(clientSocket, RecvBuffer.data() + 1, 4, 0);
+        if (!RemoteApi::CheckReceivedBytes(receivedBytes, 4)) return;
         memcpy(&remainingBytes, RecvBuffer.data() + 1, 4);
-        nn::socket::Recv(clientSocket, RecvBuffer.data() + 5, remainingBytes, MSG_DONTWAIT);
+        receivedBytes = nn::socket::Recv(clientSocket, RecvBuffer.data() + 5, remainingBytes, 0);
+        if (!RemoteApi::CheckReceivedBytes(receivedBytes, remainingBytes)) return;
         RecvBufferLength += 4 + remainingBytes;
         RemoteApi::ParseRemoteLuaExec();
         break;
