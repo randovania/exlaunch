@@ -24,4 +24,5 @@ namespace nn::socket {
     s32 Bind(s32 socket, const sockaddr* addr, u32 addrLen);
     s32 Listen(s32 socket, s32 backlog);
     s32 Accept(s32 socket, sockaddr* addrOut, u32* addrLenOut);
+    s32 Shutdown(s32 desc, s32 how);
 };

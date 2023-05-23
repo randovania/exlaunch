@@ -22,6 +22,7 @@ enum PacketType {
     PACKET_COLLECTED_INDICES,
     PACKET_RECEIVED_PICKUPS,
     PACKET_GAME_STATE,
+    PACKET_MALFORMED,
 };
 
 enum ClientInterests {
@@ -42,4 +43,6 @@ class RemoteApi {
     static void ParseClientPacket();
     static void ParseHandshake();
     static void ParseRemoteLuaExec();
+    static void SendMalformedPacket();
+    static bool CheckReceivedBytes(ssize_t receivedBytes, int should);
 };
