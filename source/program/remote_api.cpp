@@ -218,37 +218,61 @@ void RemoteApi::ParseRemoteLuaExec() {
     readyForGameThread.store(true);
 }
 
-void RemoteApi::SendMalformedPacket() {
+void RemoteApi::SendMalformedPacket(PacketType packet_type, ssize_t receivedBytes, int should) {
     PacketBuffer buffer(new std::vector<u8>());
     buffer->push_back(PACKET_MALFORMED);
+    buffer->push_back(packet_type);
+    buffer->push_back(receivedBytes & 0xff);
+    buffer->push_back((receivedBytes >> 8)  & 0xff);
+    buffer->push_back((receivedBytes >> 16)  & 0xff);
+    buffer->push_back((receivedBytes >> 24)  & 0xff);
+    buffer->push_back(should & 0xff);
+    buffer->push_back((should >> 8)  & 0xff);
+    buffer->push_back((should >> 16)  & 0xff);
+    buffer->push_back((should >> 24)  & 0xff);
     AddPacketToSendBuffer(buffer);
 }
 
-bool RemoteApi::CheckReceivedBytes(ssize_t receivedBytes, int should) {
+bool RemoteApi::CheckReceivedBytes(PacketType packet_type, ssize_t receivedBytes, int should) {
     if (receivedBytes != should) {
-        RemoteApi::SendMalformedPacket();
+        int receivedBytesAsInt = (int) receivedBytes;
+        RemoteApi::SendMalformedPacket(packet_type, receivedBytesAsInt, should);
         return false;
     }
     return true;
 }
 
 void RemoteApi::ParseClientPacket() {
+    int payloadLength = 0;
     int remainingBytes = 0;
     ssize_t receivedBytes = -1;
+    char* placeForNextPart = NULL;
+
     switch (RecvBuffer.data()[0]) {
     case PACKET_HANDSHAKE:
         RecvBufferLength += 1;
         receivedBytes = nn::socket::Recv(clientSocket, RecvBuffer.data() + 1, 1, 0);
-        if (!RemoteApi::CheckReceivedBytes(receivedBytes, 1)) return;
+        if (!RemoteApi::CheckReceivedBytes(PACKET_HANDSHAKE, receivedBytes, 1)) return;
         RemoteApi::ParseHandshake();
         break;
     case PACKET_REMOTE_LUA_EXEC:
+        // receive the payload length, which is the length of the lua string
         receivedBytes = nn::socket::Recv(clientSocket, RecvBuffer.data() + 1, 4, 0);
-        if (!RemoteApi::CheckReceivedBytes(receivedBytes, 4)) return;
-        memcpy(&remainingBytes, RecvBuffer.data() + 1, 4);
-        receivedBytes = nn::socket::Recv(clientSocket, RecvBuffer.data() + 5, remainingBytes, 0);
-        if (!RemoteApi::CheckReceivedBytes(receivedBytes, remainingBytes)) return;
-        RecvBufferLength += 4 + remainingBytes;
+        if (!RemoteApi::CheckReceivedBytes(PACKET_REMOTE_LUA_EXEC, receivedBytes, 4)) return;
+        memcpy(&payloadLength, RecvBuffer.data() + 1, 4);
+        RecvBufferLength += 4;
+
+        // lua strings can be long, we may receive it in chunks
+        remainingBytes = payloadLength;
+        placeForNextPart = RecvBuffer.data() + 5;
+        while (remainingBytes > 0) {
+            receivedBytes = nn::socket::Recv(clientSocket, placeForNextPart, remainingBytes, 0);
+            if (receivedBytes <= 0) break;
+            remainingBytes -= receivedBytes;
+            RecvBufferLength += receivedBytes;
+            placeForNextPart += receivedBytes;
+        }
+        if (!RemoteApi::CheckReceivedBytes(PACKET_REMOTE_LUA_EXEC, RecvBufferLength - 5, payloadLength)) return;
         RemoteApi::ParseRemoteLuaExec();
         break;
     case PACKET_KEEP_ALIVE:
