@@ -254,6 +254,12 @@ int new_game_state_send(lua_State* L) {
     return 0;
 }
 
+/* Gets called by lua to get current connection state */
+int is_connected(lua_State* L) {
+    lua_pushboolean(L, RemoteApi::IsConnected());
+    return 1;
+}
+
 
 static const luaL_Reg multiworld_lib[] = {
   {"Init", multiworld_init},
@@ -263,6 +269,7 @@ static const luaL_Reg multiworld_lib[] = {
   {"SendIndices", indices_send},
   {"SendReceivedPickups", recv_pickups_send},
   {"SendNewGameState", new_game_state_send},
+  {"Connected", is_connected},
   {NULL, NULL}  
 };
 

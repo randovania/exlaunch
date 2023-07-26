@@ -280,3 +280,7 @@ void RemoteApi::ParseClientPacket() {
         break;
     }
 }
+
+bool RemoteApi::IsConnected() {
+    return clientSocket > 0;
+}
