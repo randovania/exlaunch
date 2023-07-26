@@ -45,4 +45,5 @@ class RemoteApi {
     static void ParseRemoteLuaExec();
     static void SendMalformedPacket(PacketType packet_type, ssize_t receivedBytes, int should);
     static bool CheckReceivedBytes(PacketType packet_type, ssize_t receivedBytes, int should);
+    static bool IsConnected();
 };
