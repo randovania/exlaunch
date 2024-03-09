@@ -7,7 +7,7 @@ if [ -z "${RYU_PATH}" ]; then
 fi
 
 # Setup the path to the game's mods folder.
-export MODS_PATH=${RYU_PATH}/mods/contents/${PROGRAM_ID}/mods
+export MODS_PATH=${RYU_PATH}/mods/contents/${PROGRAM_ID}/DreadRandovania/
 
 # Ensure directory exists.
 mkdir -p ${MODS_PATH}/exefs;
