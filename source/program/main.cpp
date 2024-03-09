@@ -333,7 +333,6 @@ extern "C" void exl_main(void* x0, void* x1)
 {
     functionOffsets offsets;
     /* Setup hooking enviroment. */
-    envSetOwnProcessHandle(exl::util::proc_handle::Get());
     exl::hook::Initialize();
 
     getVersionOffsets(&offsets);
