@@ -9,7 +9,7 @@ jobs:
     name: Build exlaunch
     runs-on: ubuntu-latest
     container:
-      image: devkitpro/devkitarm
+      image: devkitpro/devkita64
     steps:
     - name: Checkout repo
       uses: actions/checkout@v4
@@ -17,8 +17,6 @@ jobs:
         submodules: recursive
         fetch-depth: 0
         fetch-tags: true
-    - name: Install group switch-dev
-      run: dkp-pacman -S --noconfirm switch-dev
     - name: Build
       run: make
     - name: Upload artifacts
