@@ -17,6 +17,13 @@ dynamic = ["version"]
 requires-python = ">= 3.10"
 readme = "README.md"
 
+[project.urls]
+Homepage = "https://github.com/randovania/open-dread-rando-exlaunch"
+
+# Entry Points for PyInstaller
+[project.entry-points.pyinstaller40]
+hook-dirs = "open_dread_rando_exlaunch.__pyinstaller:get_hook_dirs"
+
 [tool.setuptools_scm]
 local_scheme = "no-local-version"
 write_to = "src/open_dread_rando_exlaunch/version.py"
