@@ -1,1 +1,1 @@
-recursive-include src/exlaunch/deploy *
+recursive-include src/open_dread_rando_exlaunch/deploy *
