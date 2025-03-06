@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools >= 61.0", "setuptools_scm[toml]>=3.4.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "open-dread-rando-exlaunch"
+description = "Exlaunch binary files for open-dread-rando."
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dynamic = ["version"]
+requires-python = ">= 3.10"
+readme = "README.md"
+
+[tool.setuptools_scm]
+local_scheme = "no-local-version"
+write_to = "src/open_dread_rando_exlaunch/version.py"

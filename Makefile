@@ -11,7 +11,7 @@ include $(PWD)/config.mk
 
 # Define common variables.
 NAME := $(shell basename $(PWD))
-OUT := $(PWD)/deploy
+OUT := $(PWD)/src/open_dread_rando_exlaunch/deploy
 SD_OUT := atmosphere/contents/$(PROGRAM_ID)/exefs
 
 
